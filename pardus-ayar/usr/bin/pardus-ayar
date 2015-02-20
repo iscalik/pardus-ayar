@@ -75,75 +75,12 @@ end
 EOF
 }
 
-# $1 is 0 to disable overscan, 1 to disable it
-set_overscan() {
-  # Stop if /boot is not a mountpoint
-  if ! mountpoint -q /boot; then
-    return 1
-  fi
 
-  [ -e /boot/config.txt ] || touch /boot/config.txt
-
-  if [ "$1" -eq 0 ]; then # disable overscan
-    sed /boot/config.txt -i -e "s/^overscan_/#overscan_/"
-    set_config_var disable_overscan 1 /boot/config.txt
-  else # enable overscan
-    set_config_var disable_overscan 0 /boot/config.txt
-  fi
-}
-
-do_overscan() {
-  whiptail --yesno "Overscan yapmak istiyormusun? (Eski TV)" 20 60 2 \
-    --yes-button Devre" "Dışı --no-button Etkinleştir
-  RET=$?
-  if [ $RET -eq 0 ] || [ $RET -eq 1 ]; then
-    ASK_TO_REBOOT=1
-    set_overscan $RET;
-  else
-    return 1
-  fi
-}
 
 do_change_pass() {
   whiptail --msgbox "Root kullanıcısı için parola istenecektir." 20 60 1
   passwd root &&
   whiptail --msgbox "Parola değiştirlidi." 20 60 1
-}
-
-do_configure_keyboard() {
-  dpkg-reconfigure keyboard-configuration &&
-  printf "keymap yükleniyor. Biraz bekleyin.\n" &&
-  invoke-rc.d keyboard-setup start
-}
-
-do_change_locale() {
-  dpkg-reconfigure locales
-}
-
-do_change_timezone() {
-  dpkg-reconfigure tzdata
-}
-
-
-get_current_memory_split() {
-  # Stop if /boot is not a mountpoint
-  if ! mountpoint -q /boot; then
-    return 1
-  fi
-  AVAILABLE_SPLITS="128 192 224 240"
-  MEMSPLIT_DESCRIPTION=""
-  for SPLIT in $AVAILABLE_SPLITS;do
-    if [ -e /boot/arm${SPLIT}_start.elf ] && cmp /boot/arm${SPLIT}_start.elf /boot/start.elf >/dev/null 2>&1;then
-      CURRENT_MEMSPLIT=$SPLIT
-      MEMSPLIT_DESCRIPTION="Current: ${CURRENT_MEMSPLIT}MiB for ARM, $((256 - $CURRENT_MEMSPLIT))MiB for VideoCore"
-      break
-    fi
-  done
-}
-
-set_memory_split() {
-  cp -a /boot/arm${1}_start.elf /boot/start.elf
-  sync
 }
 
 
@@ -182,6 +119,22 @@ Diğer semboller, noktalama işaretleri yada boşluk izin verilmemektedir.\
     echo $NEW_HOSTNAME > /etc/hostname
     sed -i "s/127.0.1.1.*$CURRENT_HOSTNAME/127.0.1.1\t$NEW_HOSTNAME/g" /etc/hosts
     ASK_TO_REBOOT=1
+  fi
+}
+
+do_web_server(){
+
+  whiptail --yesno "lighttpd Web Sunucusunu etkinleştirmek istiyormusunuz?" 20 60 2 \
+    --yes-button Etkinleştir --no-button Devre" "Dışı
+  RET=$?
+  if [ $RET -eq 0 ]; then
+    /etc/init.d/lighttpd start &&
+    whiptail --msgbox "lighttpd Web Sunucusu etkinleştirildi." 20 60 1
+  elif [ $RET -eq 1 ]; then
+    /etc/init.d/lighttpd stop &&
+    whiptail --msgbox "lighttpd Web Sunucusu devre dışı bırakıldı." 20 60 1
+  else
+    return $RET
   fi
 }
 
@@ -272,8 +225,9 @@ while true; do
     "1 Şifre Değiştir" "Yönetici (root) şifrenizi değiştirin." \
     "2 SSH" "Uzaktan kontrolu (SSH) Etkinleştir veya Devre Dışı bırak." \
     "3 Hostname" "Cihazınızın ağda görünen isimi." \
-    "4 Güncelle" "Cihazı güncelle." \
-    "5 pardus-config Hakkında" "Bu ayarlama aracı hakkında bilgiler." \
+    "4 Web Sunucusu" "lighttpd Web Sunucusu ayarı." \
+    "5 Güncelle" "Cihazı güncelle." \
+    "6 pardus-config Hakkında" "Bu ayarlama aracı hakkında bilgiler." \
     3>&1 1>&2 2>&3)
   RET=$?
   if [ $RET -eq 1 ]; then
@@ -283,8 +237,9 @@ while true; do
       1\ *) do_change_pass ;;
       2\ *) do_ssh ;;
       3\ *) do_change_hostname ;;
-      4\ *) do_update ;;
-      5\ *) do_about ;;
+      4\ *) do_web_server ;;
+      5\ *) do_update ;;
+      6\ *) do_about ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   else
