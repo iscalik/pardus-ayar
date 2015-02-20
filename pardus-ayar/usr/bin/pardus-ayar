@@ -139,6 +139,22 @@ do_web_server(){
 }
 
 
+do_ftp_server(){
+
+  whiptail --yesno "vsftpd FTP Sunucusunu etkinleştirmek istiyormusunuz?" 20 60 2 \
+    --yes-button Etkinleştir --no-button Devre" "Dışı
+  RET=$?
+  if [ $RET -eq 0 ]; then
+    /etc/init.d/vsftpd start &&
+    whiptail --msgbox "vsftpd FTP Sunucusu etkinleştirildi." 20 60 1
+  elif [ $RET -eq 1 ]; then
+    /etc/init.d/vsftpd stop &&
+    whiptail --msgbox "vsftpd FTP Sunucusu devre dışı bırakıldı." 20 60 1
+  else
+    return $RET
+  fi
+}
+
 do_update() {
   apt-get update &&
   apt-get install pardus-config &&
@@ -226,8 +242,9 @@ while true; do
     "2 SSH" "Uzaktan kontrolu (SSH) Etkinleştir veya Devre Dışı bırak." \
     "3 Hostname" "Cihazınızın ağda görünen isimi." \
     "4 Web Sunucusu" "lighttpd Web Sunucusu ayarı." \
-    "5 Güncelle" "Cihazı güncelle." \
-    "6 pardus-config Hakkında" "Bu ayarlama aracı hakkında bilgiler." \
+    "5 FTP Sunucusu" "vsftpd FTP Sunucusu ayarı." \
+    "6 Güncelle" "Cihazı güncelle." \
+    "7 pardus-config Hakkında" "Bu ayarlama aracı hakkında bilgiler." \
     3>&1 1>&2 2>&3)
   RET=$?
   if [ $RET -eq 1 ]; then
@@ -238,8 +255,9 @@ while true; do
       2\ *) do_ssh ;;
       3\ *) do_change_hostname ;;
       4\ *) do_web_server ;;
-      5\ *) do_update ;;
-      6\ *) do_about ;;
+      5\ *) do_ftp_server ;;
+      6\ *) do_update ;;
+      7\ *) do_about ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   else
