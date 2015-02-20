@@ -1,0 +1,9 @@
+Package: pardus-ayar
+Version: 20150220-1
+Architecture: all
+Maintainer: Ismet Said Çalık <ismetsaid.calik@gmail.com>
+Depends: whiptail, parted, lua5.1, triggerhappy
+Section: unknown
+Priority: extra
+Homepage: https://github.com/iscalik/pardus-ayar
+Description: Pardus ARM için konfigürasyon aracı.

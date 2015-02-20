@@ -1,0 +1,293 @@
+#!/bin/sh
+# Part of pardus-ayar http://github.com/iscalik/pardus-ayar
+#
+# See LICENSE file for copyright and license details
+
+INTERACTIVE=True
+ASK_TO_REBOOT=0
+
+calc_wt_size() {
+  # NOTE: it's tempting to redirect stderr to /dev/null, so supress error 
+  # output from tput. However in this case, tput detects neither stdout or 
+  # stderr is a tty and so only gives default 80, 24 values
+  WT_HEIGHT=17
+  WT_WIDTH=$(tput cols)
+
+  if [ -z "$WT_WIDTH" ] || [ "$WT_WIDTH" -lt 60 ]; then
+    WT_WIDTH=80
+  fi
+  if [ "$WT_WIDTH" -gt 178 ]; then
+    WT_WIDTH=120
+  fi
+  WT_MENU_HEIGHT=$(($WT_HEIGHT-8))
+}
+
+do_about() {
+  whiptail --msgbox "\
+Bu araç Pardus ARM kurulu cihazınızı belirli ayarlarınızın yapılmasını sağlar.\
+          
+
+
+                                                          
+Pardus ARM Geliştirici Takımı
+=============================
+Erdoğan BİLGİCİ <destek@linuxçozumleri.com>
+İsmet Said Çalık <ismetsaid.calik@pardus.net.tr>
+Mehmet Nuri Öztürk <mehmet@pardus.net.tr>
+" 20 70 1
+}
+
+
+set_config_var() {
+  lua - "$1" "$2" "$3" <<EOF > "$3.bak"
+local key=assert(arg[1])
+local value=assert(arg[2])
+local fn=assert(arg[3])
+local file=assert(io.open(fn))
+local made_change=false
+for line in file:lines() do
+  if line:match("^#?%s*"..key.."=.*$") then
+    line=key.."="..value
+    made_change=true
+  end
+  print(line)
+end
+
+if not made_change then
+  print(key.."="..value)
+end
+EOF
+mv "$3.bak" "$3"
+}
+
+get_config_var() {
+  lua - "$1" "$2" <<EOF
+local key=assert(arg[1])
+local fn=assert(arg[2])
+local file=assert(io.open(fn))
+for line in file:lines() do
+  local val = line:match("^#?%s*"..key.."=(.*)$")
+  if (val ~= nil) then
+    print(val)
+    break
+  end
+end
+EOF
+}
+
+# $1 is 0 to disable overscan, 1 to disable it
+set_overscan() {
+  # Stop if /boot is not a mountpoint
+  if ! mountpoint -q /boot; then
+    return 1
+  fi
+
+  [ -e /boot/config.txt ] || touch /boot/config.txt
+
+  if [ "$1" -eq 0 ]; then # disable overscan
+    sed /boot/config.txt -i -e "s/^overscan_/#overscan_/"
+    set_config_var disable_overscan 1 /boot/config.txt
+  else # enable overscan
+    set_config_var disable_overscan 0 /boot/config.txt
+  fi
+}
+
+do_overscan() {
+  whiptail --yesno "Overscan yapmak istiyormusun? (Eski TV)" 20 60 2 \
+    --yes-button Devre" "Dışı --no-button Etkinleştir
+  RET=$?
+  if [ $RET -eq 0 ] || [ $RET -eq 1 ]; then
+    ASK_TO_REBOOT=1
+    set_overscan $RET;
+  else
+    return 1
+  fi
+}
+
+do_change_pass() {
+  whiptail --msgbox "Root kullanıcısı için parola istenecektir." 20 60 1
+  passwd root &&
+  whiptail --msgbox "Parola değiştirlidi." 20 60 1
+}
+
+do_configure_keyboard() {
+  dpkg-reconfigure keyboard-configuration &&
+  printf "keymap yükleniyor. Biraz bekleyin.\n" &&
+  invoke-rc.d keyboard-setup start
+}
+
+do_change_locale() {
+  dpkg-reconfigure locales
+}
+
+do_change_timezone() {
+  dpkg-reconfigure tzdata
+}
+
+
+get_current_memory_split() {
+  # Stop if /boot is not a mountpoint
+  if ! mountpoint -q /boot; then
+    return 1
+  fi
+  AVAILABLE_SPLITS="128 192 224 240"
+  MEMSPLIT_DESCRIPTION=""
+  for SPLIT in $AVAILABLE_SPLITS;do
+    if [ -e /boot/arm${SPLIT}_start.elf ] && cmp /boot/arm${SPLIT}_start.elf /boot/start.elf >/dev/null 2>&1;then
+      CURRENT_MEMSPLIT=$SPLIT
+      MEMSPLIT_DESCRIPTION="Current: ${CURRENT_MEMSPLIT}MiB for ARM, $((256 - $CURRENT_MEMSPLIT))MiB for VideoCore"
+      break
+    fi
+  done
+}
+
+set_memory_split() {
+  cp -a /boot/arm${1}_start.elf /boot/start.elf
+  sync
+}
+
+
+
+do_ssh() {
+  if [ -e /var/log/regen_ssh_keys.log ] && ! grep -q "^finished" /var/log/regen_ssh_keys.log; then
+    whiptail --msgbox "SSH key kullanılıyor. Daha sonra tekrar deneyin." 20 60 2
+    return 1
+  fi
+  whiptail --yesno "SSH bağlantınızı etkinleştirmek istiyormusunuz?" 20 60 2 \
+    --yes-button Etkinleştir --no-button Devre" "Dışı
+  RET=$?
+  if [ $RET -eq 0 ]; then
+    update-rc.d ssh enable &&
+    invoke-rc.d ssh start &&
+    whiptail --msgbox "SSH server etkinleştirildi." 20 60 1
+  elif [ $RET -eq 1 ]; then
+    update-rc.d ssh disable &&
+    whiptail --msgbox "SSH server devre dışı bırakıldı." 20 60 1
+  else
+    return $RET
+  fi
+}
+do_change_hostname() {
+  whiptail --msgbox "\
+Lütfen Dikkat: \
+Sadece ASCII karekterlerı kullanınız. 'a'-'z', 
+'0'-'9', ve tire.
+Hostname tire ile başlayıp bitemez. 
+Diğer semboller, noktalama işaretleri yada boşluk izin verilmemektedir.\
+" 20 70 1
+
+  CURRENT_HOSTNAME=`cat /etc/hostname | tr -d " \t\n\r"`
+  NEW_HOSTNAME=$(whiptail --inputbox "Hostname giriniz" 20 60 "$CURRENT_HOSTNAME" 3>&1 1>&2 2>&3)
+  if [ $? -eq 0 ]; then
+    echo $NEW_HOSTNAME > /etc/hostname
+    sed -i "s/127.0.1.1.*$CURRENT_HOSTNAME/127.0.1.1\t$NEW_HOSTNAME/g" /etc/hosts
+    ASK_TO_REBOOT=1
+  fi
+}
+
+
+do_update() {
+  apt-get update &&
+  apt-get install pardus-config &&
+  printf "Güncelemeden önce 5 saniye bekleniyor." &&
+  sleep 5 &&
+  exec pardus-config
+}
+
+do_finish() {
+  if [ -e /etc/profile.d/pardus-ayar.sh ]; then
+    rm -f /etc/profile.d/pardus-ayar.sh
+    sed -i /etc/inittab \
+      -e "s/^#\(.*\)#\s*RPICFG_TO_ENABLE\s*/\1/" \
+      -e "/#\s*RPICFG_TO_DISABLE/d"
+    telinit q
+  fi
+  if [ $ASK_TO_REBOOT -eq 1 ]; then
+    whiptail --yesno "Yeniden başlatmak istermisiniz?" 20 60 2
+    if [ $? -eq 0 ]; then # yes
+      sync
+      reboot
+    fi
+  fi
+  exit 0
+}
+
+#
+# Command line options for non-interactive use
+#
+for i in $*
+do
+  case $i in
+  --memory-split)
+    OPT_MEMORY_SPLIT=GET
+    printf "Not currently supported\n"
+    exit 1
+    ;;
+  --memory-split=*)
+    OPT_MEMORY_SPLIT=`echo $i | sed 's/[-a-zA-Z0-9]*=//'`
+    printf "Not currently supported\n"
+    exit 1
+    ;;
+  --expand-rootfs)
+    INTERACTIVE=False
+    do_expand_rootfs
+    printf "Please reboot\n"
+    exit 0
+    ;;
+  *)
+    # unknown option
+    ;;
+  esac
+done
+
+#if [ "GET" = "${OPT_MEMORY_SPLIT:-}" ]; then
+#  set -u # Fail on unset variables
+#  get_current_memory_split
+#  echo $CURRENT_MEMSPLIT
+#  exit 0
+#fi
+
+# Everything else needs to be run as root
+if [ $(id -u) -ne 0 ]; then
+  printf "Yönetici olarak çalıştırmanız gerekli. 'sudo pardus-config' deneyiniz.\n"
+  exit 1
+fi
+
+if [ -n "${OPT_MEMORY_SPLIT:-}" ]; then
+  set -e # Fail when a command errors
+  set_memory_split "${OPT_MEMORY_SPLIT}"
+  exit 0
+fi
+
+
+
+
+
+#
+# Interactive use loop
+#
+calc_wt_size
+while true; do
+  FUN=$(whiptail --title "Pardus ARM Konfigurasyon Araci (pardus-config)" --menu "Ayarlar" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Bitir --ok-button Seç \
+    "1 Şifre Değiştir" "Yönetici (root) şifrenizi değiştirin." \
+    "2 SSH" "Uzaktan kontrolu (SSH) Etkinleştir veya Devre Dışı bırak." \
+    "3 Hostname" "Cihazınızın ağda görünen isimi." \
+    "4 Güncelle" "Cihazı güncelle." \
+    "5 pardus-config Hakkında" "Bu ayarlama aracı hakkında bilgiler." \
+    3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    do_finish
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      1\ *) do_change_pass ;;
+      2\ *) do_ssh ;;
+      3\ *) do_change_hostname ;;
+      4\ *) do_update ;;
+      5\ *) do_about ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  else
+    exit 1
+  fi
+done
